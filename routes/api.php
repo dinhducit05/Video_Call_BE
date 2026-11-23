@@ -17,4 +17,5 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/rooms/{roomCode}', [RoomController::class, 'show']);
     Route::post('/rooms/{roomCode}/join', [RoomController::class, 'join']);
     Route::post('/rooms/{roomCode}/leave', [RoomController::class, 'leave']);
+    Route::get('/rooms/{roomCode}/access', [RoomController::class, 'checkAccess']);
 });

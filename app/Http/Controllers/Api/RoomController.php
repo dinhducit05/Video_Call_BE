@@ -146,4 +146,33 @@ class RoomController extends Controller
             'message' => 'Đã rời phòng'
         ]);
     }
+
+    // Kiem tra quyen vao phong
+    public function checkAccess(Request $request, string $roomCode)
+    {
+        $room = Room::where('room_code', $roomCode)->firstOrFail();
+
+        $isParticipant = RoomParticipant::where('room_id', $roomCode)
+            ->where('user_id', $request->user()->id)
+            ->whereNull('left_at')
+            ->exists();
+
+        if (!$isParticipant) {
+            return response()->json([
+                'message' => 'Bạn chưa tham gia phòng này'
+            ], 403);
+        }
+
+        if ($room->status == 'ended') {
+            return response()->json([
+                'message' => 'Phòng đã kết thúc'
+            ], 422);
+        }
+
+        return response()->json([
+            'message' => 'Có quyền tham gia cuộc gọi',
+            'room' => $room,
+            'user' => $request->user(),
+        ]);
+    }
 }
