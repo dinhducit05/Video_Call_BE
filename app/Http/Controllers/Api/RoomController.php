@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Room;
 use App\Models\RoomParticipant;
+use App\Models\CallHistory;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -173,6 +174,135 @@ class RoomController extends Controller
             'message' => 'Có quyền tham gia cuộc gọi',
             'room' => $room,
             'user' => $request->user(),
+        ]);
+    }
+
+    public function startCall(Request $request, string $roomCode)
+    {
+        $room = Room::where('room_code', $roomCode)->firstOrFail();
+
+        if ($room->host_id !== $request->user()->id) {
+            return response()->json([
+                'message' => 'Chỉ chủ phòng mới có quyền bắt đầu cuộc gọi'
+            ], 403);
+        }
+
+        if ($room->status === 'ended') {
+            return response()->json([
+                'message' => 'Phòng đã kết thúc'
+            ], 422);
+        }
+
+        if ($room->status === 'active') {
+            return response()->json([
+                'message' => 'Cuộc gọi đang diễn ra',
+                'room' => $room
+            ]);
+        }
+
+        $room->update([
+            'status' => 'active',
+            'started_at' => now(),
+        ]);
+
+        return response()->json([
+            'message' => 'Bắt đầu cuộc gọi thành công',
+            'room' => $room
+        ]);
+    }
+
+    public function endCall(Request $request, string $roomCode)
+    {
+        $room = Room::where('room_code', $roomCode)->firstOrFail();
+
+        if ($room->host_id !== $request->user()->id) {
+            return response()->json([
+                'message' => 'Chỉ chủ phòng mới có quyền kết thúc cuộc gọi'
+            ], 403);
+        }
+
+        if ($room->status === 'ended') {
+            return response()->json([
+                'message' => 'Phòng đã được kết thúc'
+            ], 422);
+        }
+
+        $result = DB::transaction(function () use ($room) {
+            $endedAt = now();
+            $startedAt = $room->started_at ?? $room->created_at;
+
+            $room->update([
+                'status' => 'ended',
+                'ended_at' => $endedAt,
+            ]);
+
+            // Đánh dấu tất cả người còn trong phòng là đã rời
+            RoomParticipant::where('room_id', $room->id)
+                ->whereNull('left_at')
+                ->update([
+                    'left_at' => $endedAt,
+                    'is_mic_on' => false,
+                    'is_camera_on' => false,
+                ]);
+
+            // Một phòng chỉ có một lịch sử gọi
+            $history = CallHistory::updateOrCreate(
+                ['room_id' => $room->id],
+                [
+                    'caller_id' => $room->host_id,
+                    'receiver_id' => null,
+                    'status' => 'completed',
+                    'started_at' => $startedAt,
+                    'ended_at' => $endedAt,
+                    'duration_seconds' => $startedAt->diffInSeconds($endedAt),
+                ]
+            );
+
+            return $history;
+        });
+
+        return response()->json([
+            'message' => 'Kết thúc cuộc gọi thành công',
+            'history' => $result,
+        ]);
+    }
+
+    public function participants(Request $request, string $roomCode)
+    {
+        $room = Room::where('room_code', $roomCode)->firstOrFail();
+
+        $participants = RoomParticipant::with('user:id,name,email,avatar')
+            ->where('room_id', $room->id)
+            ->whereNull('left_at')
+            ->orderBy('joined_at')
+            ->get();
+
+        return response()->json([
+            'room_code' => $room->room_code,
+            'total' => $participants->count(),
+            'participants' => $participants,
+        ]);
+    }
+
+    public function updateMediaState(Request $request, string $roomCode)
+    {
+        $data = $request->validate([
+            'is_mic_on' => 'required|boolean',
+            'is_camera_on' => 'required|boolean',
+        ]);
+
+        $room = Room::where('room_code', $roomCode)->firstOrFail();
+
+        $participant = RoomParticipant::where('room_id', $room->id)
+            ->where('user_id', $request->user()->id)
+            ->whereNull('left_at')
+            ->firstOrFail();
+
+        $participant->update($data);
+
+        return response()->json([
+            'message' => 'Cập nhật trạng thái thiết bị thành công',
+            'participant' => $participant,
         ]);
     }
 }
